@@ -170,22 +170,22 @@ public:
     //增加了超时处理
     bool pop(T &item, int ms_timeout)
     {
-        struct timespec t = {0, 0};
-        struct timeval now = {0, 0};
-        gettimeofday(&now, NULL);
+        struct timespec t = {0, 0};         //struct timespec提供秒和纳秒单位，最高精度是纳秒
+        struct timeval now = {0, 0};        //struct  timeval：提供秒和微秒单位，最高精度是微秒
+        gettimeofday(&now, NULL);           //gettimeofday(struct  timeval*tv,struct  timezone *tz),返回当前时间tv以及当前时区信息tz
         m_mutex.lock();
         if (m_size <= 0)
         {
             t.tv_sec = now.tv_sec + ms_timeout / 1000;
             t.tv_nsec = (ms_timeout % 1000) * 1000;
-            if (!m_cond.timewait(m_mutex.get(), t))
+            if (!m_cond.timewait(m_mutex.get(), t)) //pthread_cond_timedwait()中的&t需要时间的绝对值
             {
                 m_mutex.unlock();
                 return false;
             }
         }
 
-        if (m_size <= 0)
+        if (m_size <= 0)    //唤醒后线程未竞争到资源
         {
             m_mutex.unlock();
             return false;

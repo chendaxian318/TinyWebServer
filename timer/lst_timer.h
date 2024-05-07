@@ -26,25 +26,25 @@
 
 class util_timer;
 
-struct client_data
+struct client_data          //开辟用户socket结构 对应于最大处理fd
 {
-    sockaddr_in address;
-    int sockfd;
-    util_timer *timer;
+    sockaddr_in address;    //客户但socket地址
+    int sockfd;             //socket文件描述符
+    util_timer *timer;      //定时器
 };
 
-class util_timer
+class util_timer        //定时器类
 {
 public:
     util_timer() : prev(NULL), next(NULL) {}
 
 public:
-    time_t expire;
+    time_t expire;          //超时时间
     
-    void (* cb_func)(client_data *);
-    client_data *user_data;
-    util_timer *prev;
-    util_timer *next;
+    void (* cb_func)(client_data *);    //回调函数
+    client_data *user_data; //连接资源
+    util_timer *prev;       //前向定时器
+    util_timer *next;       //后继定时器
 };
 
 class sort_timer_lst

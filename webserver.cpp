@@ -7,12 +7,13 @@ WebServer::WebServer()
 
     //root文件夹路径
     char server_path[200];
-    getcwd(server_path, 200);
+    getcwd(server_path, 200);   //复制当前路径给server_path
     char root[6] = "/root";
     m_root = (char *)malloc(strlen(server_path) + strlen(root) + 1);
     strcpy(m_root, server_path);
     strcat(m_root, root);
 
+    //m_root字符串为tinywebserve/root目录的路径
     //定时器
     users_timer = new client_data[MAX_FD];
 }
@@ -106,29 +107,42 @@ void WebServer::eventListen()
     m_listenfd = socket(PF_INET, SOCK_STREAM, 0);
     assert(m_listenfd >= 0);
 
+    //TCP连接断开的时候调用closesocket函数，有优雅的断开和强制断开两种方式
+
     //优雅关闭连接
     if (0 == m_OPT_LINGER)
     {
+        //底层会将未发送完的数据发送完成后再释放资源，也就是优雅的退出
         struct linger tmp = {0, 1};
         setsockopt(m_listenfd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
     }
     else if (1 == m_OPT_LINGER)
     {
+        //这种方式下，在调用closesocket的时候不会立刻返回，内核会延迟一段时间，这个时间就由l_linger得值来决定。
+        //如果超时时间到达之前，发送完未发送的数据(包括FIN包)并得到另一端的确认，closesocket会返回正确，socket描述符优雅性退出。
+        //否则，closesocket会直接返回 错误值，未发送数据丢失，socket描述符被强制性退出。需要注意的时，如果socket描述符被设置为非堵塞型，则closesocket会直接返回值。
         struct linger tmp = {1, 1};
         setsockopt(m_listenfd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
     }
 
     int ret = 0;
     struct sockaddr_in address;
+    // bzero() 会将内存块（字符串）的前n个字节清零;
+    // s为内存（字符串）指针，n 为需要清零的字节数。
+    // 在网络编程中会经常用到。
     bzero(&address, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_ANY);
     address.sin_port = htons(m_port);
 
     int flag = 1;
+    //允许重用本地地址和端口
     setsockopt(m_listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+     //传统绑定步骤
     ret = bind(m_listenfd, (struct sockaddr *)&address, sizeof(address));
+    //>=0的设定 因为只有小于0才是错误情况
     assert(ret >= 0);
+    //>=0的设定 因为只有小于0才是错误情况
     ret = listen(m_listenfd, 5);
     assert(ret >= 0);
 
@@ -139,14 +153,23 @@ void WebServer::eventListen()
     m_epollfd = epoll_create(5);
     assert(m_epollfd != -1);
 
+
+    //将lfd上树
     utils.addfd(m_epollfd, m_listenfd, false, m_LISTENTrigmode);
     http_conn::m_epollfd = m_epollfd;
-
+    
+    //创建管道套接字
     ret = socketpair(PF_UNIX, SOCK_STREAM, 0, m_pipefd);
     assert(ret != -1);
+    //设置管道写端为非阻塞，为什么写端要非阻塞？
+    //send是将信息发送给套接字缓冲区，如果缓冲区满了，则会阻塞，
+    //这时候会进一步增加信号处理函数的执行时间，为此，将其修改为非阻塞。
     utils.setnonblocking(m_pipefd[1]);
+
+    //设置管道读端为ET非阻塞
     utils.addfd(m_epollfd, m_pipefd[0], false, 0);
 
+    //传递给主循环的信号值，这里只关注SIGALRM和SIGTERM
     utils.addsig(SIGPIPE, SIG_IGN);
     utils.addsig(SIGALRM, utils.sig_handler, false);
     utils.addsig(SIGTERM, utils.sig_handler, false);
@@ -166,13 +189,13 @@ void WebServer::timer(int connfd, struct sockaddr_in client_address)
     //创建定时器，设置回调函数和超时时间，绑定用户数据，将定时器添加到链表中
     users_timer[connfd].address = client_address;
     users_timer[connfd].sockfd = connfd;
-    util_timer *timer = new util_timer;
-    timer->user_data = &users_timer[connfd];
-    timer->cb_func = cb_func;
-    time_t cur = time(NULL);
-    timer->expire = cur + 3 * TIMESLOT;
-    users_timer[connfd].timer = timer;
-    utils.m_timer_lst.add_timer(timer);
+    util_timer *timer = new util_timer;         //创建定时器
+    timer->user_data = &users_timer[connfd];    //绑定用户数据
+    timer->cb_func = cb_func;                   //设置回调函数
+    time_t cur = time(NULL);                    //获取当前时间
+    timer->expire = cur + 3 * TIMESLOT;         //设置超时时间
+    users_timer[connfd].timer = timer;          
+    utils.m_timer_lst.add_timer(timer);         //添加定时器到链表中
 }
 
 //若有数据传输，则将定时器往后延迟3个单位
@@ -246,7 +269,7 @@ bool WebServer::dealwithsignal(bool &timeout, bool &stop_server)
     int ret = 0;
     int sig;
     char signals[1024];
-    ret = recv(m_pipefd[0], signals, sizeof(signals), 0);
+    ret = recv(m_pipefd[0], signals, sizeof(signals), 0);   //从管道读端读出信号值，成功返回字节数，失败返回-1
     if (ret == -1)
     {
         return false;
@@ -261,12 +284,12 @@ bool WebServer::dealwithsignal(bool &timeout, bool &stop_server)
         {
             switch (signals[i])
             {
-            case SIGALRM:
+            case SIGALRM:               //接收到SIGALRM信号，timeout设置为true
             {
                 timeout = true;
                 break;
             }
-            case SIGTERM:
+            case SIGTERM:               //接收到SIGTERM信号，终止程序运行，stop_server设置为true
             {
                 stop_server = true;
                 break;
@@ -281,7 +304,7 @@ void WebServer::dealwithread(int sockfd)
 {
     util_timer *timer = users_timer[sockfd].timer;
 
-    //reactor
+    //reactor   
     if (1 == m_actormodel)
     {
         if (timer)
@@ -318,12 +341,12 @@ void WebServer::dealwithread(int sockfd)
 
             if (timer)
             {
-                adjust_timer(timer);
+                adjust_timer(timer);    //有数据传输，则将定时器向后延3个单位，并对新的定时器在链表上的位置进行调整
             }
         }
         else
         {
-            deal_timer(timer, sockfd);
+            deal_timer(timer, sockfd);  //服务端关闭连接，删除对应的定时器
         }
     }
 }
@@ -364,31 +387,31 @@ void WebServer::dealwithwrite(int sockfd)
 
             if (timer)
             {
-                adjust_timer(timer);
+                adjust_timer(timer);        //有数据传输，则将定时器向后延3个单位，并对新的定时器在链表上的位置进行调整
             }
         }
         else
         {
-            deal_timer(timer, sockfd);
+            deal_timer(timer, sockfd);      //服务端关闭连接，移除对应的定时器
         }
     }
 }
 
 void WebServer::eventLoop()
 {
-    bool timeout = false;
+    bool timeout = false;               //超时默认为false
     bool stop_server = false;
 
     while (!stop_server)
     {
-        int number = epoll_wait(m_epollfd, events, MAX_EVENT_NUMBER, -1);
+        int number = epoll_wait(m_epollfd, events, MAX_EVENT_NUMBER, -1);   //监测发生事件的文件描述符
         if (number < 0 && errno != EINTR)
         {
             LOG_ERROR("%s", "epoll failure");
             break;
         }
 
-        for (int i = 0; i < number; i++)
+        for (int i = 0; i < number; i++)        //轮询事件描述符
         {
             int sockfd = events[i].data.fd;
 
@@ -399,13 +422,13 @@ void WebServer::eventLoop()
                 if (false == flag)
                     continue;
             }
-            else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
+            else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) //处理异常事件
             {
                 //服务器端关闭连接，移除对应的定时器
                 util_timer *timer = users_timer[sockfd].timer;
                 deal_timer(timer, sockfd);
             }
-            //处理信号
+            //处理定时器信号
             else if ((sockfd == m_pipefd[0]) && (events[i].events & EPOLLIN))
             {
                 bool flag = dealwithsignal(timeout, stop_server);
@@ -422,7 +445,7 @@ void WebServer::eventLoop()
                 dealwithwrite(sockfd);
             }
         }
-        if (timeout)
+        if (timeout)    //处理定时器为非必须事件，收到信号并不是马上处理，而是完成读写事件后再进行处理
         {
             utils.timer_handler();
 
